@@ -1,0 +1,26 @@
+---
+title: "AQIProject"
+author: "Mick Leungpathomaram"
+date: "2026-02-13"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Library Block
+
+```{r}
+library(utils)
+```
+
+
+```{r}
+source("config.R")
+
+
+
+my_data <- read.csv(csv_url)
+```
+
