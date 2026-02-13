@@ -13,6 +13,11 @@ Library Block
 
 ```{r}
 library(utils)
+library(ggplot2)
+library(dplyr)
+library(corr)
+library(caret)
+library(corrplot)
 ```
 
 
@@ -21,10 +26,168 @@ source("config.R")
 
 
 
-my_data <- read.csv(csv_url)
+aqi <- read.csv(csv_path)
 ```
 
 
 ```{r}
-print("hello world")
+#str(aqi)
+summary(aqi)
 ```
+
+
+```{r}
+missing_summary <- aqi %>%
+  summarise(across(everything(), ~sum(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "variable", values_to = "n_missing") %>%
+  mutate(pct_missing = n_missing / nrow(aqi) * 100) %>%
+  arrange(desc(n_missing))
+missing_summary
+```
+
+```{r}
+
+aqi_clean <- aqi %>% 
+  filter(!is.na(Ozone_ppm))
+
+```
+
+
+
+```{r}
+ggplot(aqi_clean, aes(x = Ozone_ppm)) +
+  geom_histogram(bins = 30, fill = "steelblue", alpha = 0.7) +
+  labs(title = "Distribution of Ozone (ppm)", x = "Ozone (ppm)", y = "Count") +
+  theme_minimal()
+
+summary(lr_data$Ozone_ppm)
+```
+
+```{r}
+ggplot(aqi_clean, aes(y = Ozone_ppm)) +
+  geom_boxplot(fill = "steelblue", alpha = 0.7) +
+  labs(title = "Ozone Distribution - Outlier Check", y = "Ozone (ppm)") +
+  theme_minimal()
+```
+
+
+```{r}
+#arbitrarily chose the temperature mean, and wind2m. DayOfYear for date purposes.
+predictors <- aqi_clean %>%
+  #select(where(is.numeric)) %>%
+  select(-Ozone_ppm, -Ozone_ppb, -Ozone_HighDay, -TempMax_C, -TempMin_C, -Year,-Month,-DayOfWeek,-Date,-Wind10m_ms) %>%
+  names()
+
+#regression
+lr_data <- aqi_clean %>%
+  select(Ozone_ppm, all_of(predictors)) %>%
+  drop_na()
+
+
+```
+
+
+Correlations
+```{r}
+cor_matrix <- cor(lr_data)
+
+high_cor <- which(abs(cor_matrix) > 0.7, arr.ind = TRUE)
+high_cor_pairs <- data.frame(
+  var1 = rownames(cor_matrix)[high_cor[,1]],
+  var2 = colnames(cor_matrix)[high_cor[,2]],
+  correlation = cor_matrix[high_cor]
+) %>%
+  distinct() %>%
+  filter(var1!=var2) %>%
+  # Removes 'duplicate' pairs
+  filter(!duplicated(paste(pmin(var1, var2), pmax(var1, var2)))) %>%
+  arrange(desc(abs(correlation)))
+high_cor_pairs
+
+corrplot(cor_matrix)
+
+```
+Mostly variables I'd expect to be correlated with one another. 
+
+
+Regression Code
+```{r}
+set.seed(1)
+
+#  train-validation-test follows a 50-30-20 split.
+train_idx <- createDataPartition(lr_data$Ozone_ppm, p = 0.5, list = FALSE)
+train_data <- lr_data[train_idx, ]
+temp_data <- lr_data[-train_idx, ]
+
+val_idx <- createDataPartition(temp_data$Ozone_ppm, p = 0.6, list = FALSE)
+val_data <- temp_data[val_idx, ]
+test_data <- temp_data[-val_idx, ]
+```
+
+Currently uses all predictors. 
+```{r}
+formula_full <- as.formula(paste("Ozone_ppm ~", paste(predictors, collapse = " + ")))
+lm_full <- lm(formula_full, data = train_data)
+
+
+summary(lm_full)
+```
+
+```{r}
+trControl <- trainControl(method = "none")
+
+# Stepwise selection 
+model_stepwise <- train(
+  formula_full,
+  data = train_data,
+  trControl = trControl,
+  method = "glmStepAIC",
+  direction = "both",
+  trace = FALSE
+)
+```
+
+```{r}
+lm_stepwise <- model_stepwise$finalModel
+
+coef(lm_stepwise)
+```
+```{r}
+summary(lm_stepwise)
+lm_stepwise_r2<-1 - (lm_stepwise$deviance / lm_stepwise$null.deviance)
+n <- nrow(train_data)
+p <- length(coef(lm_stepwise)) - 1
+lm_stepwise_adj_r2 <- 1 - (1 - lm_stepwise_r2) * (n - 1) / (n - p - 1)
+lm_stepwise_r2
+lm_stepwise_adj_r2
+```
+
+Only removes 1 predictor... Forward and backward have similar performance. Tried using best subset selection instead, but there's way too many predictors for that.
+
+72% is decent, but 11 predictors is a lot.
+```{r}
+
+regfit_full <- regsubsets(formula_full, data = train_data, nvmax = 19)
+reg_summary <- summary(regfit_full)
+print(reg_summary)
+
+subset_metrics <- data.frame(
+  n_predictors = 1:length(reg_summary$rsq),
+  rsq = reg_summary$rsq,
+  adj_rsq = reg_summary$adjr2,
+  cp = reg_summary$cp,
+  bic = reg_summary$bic
+)
+print(subset_metrics)
+```
+
+Try removing predictors where p >0.05. (CO_ppm and Pressure_kPa)
+```{r}
+significant_vars <- c("PM25_ugm3", "NO2_ppb_or_ppm", "SO2_ppb_or_ppm", "PM10_ugm3",
+                      "Wind2m_ms", "DewPoint_C", "Precip_mm", "Solar_Wm2", "DayOfYear")
+formula_reduced <- as.formula(paste("Ozone_ppm ~", paste(significant_vars, collapse = " + ")))
+lm_reduced <- lm(formula_reduced, data = train_data)
+
+summary(lm_reduced)
+```
+Considering the minimal R^2 loss, I'd consider this to be a reasonable tradeoff for having 2 fewer predictors.
