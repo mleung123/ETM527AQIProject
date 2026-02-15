@@ -15,8 +15,6 @@ Library Block
 library(utils)
 library(ggplot2)
 library(dplyr)
-library(corr)
-library(corrr)
 library(caret)
 library(corrplot)
 library(tidyr)
@@ -63,7 +61,7 @@ ggplot(aqi_clean, aes(x = Ozone_ppm)) +
   labs(title = "Distribution of Ozone (ppm)", x = "Ozone (ppm)", y = "Count") +
   theme_minimal()
 
-summary(lr_data$Ozone_ppm)
+summary(aqi_clean$Ozone_ppm)
 ```
 
 ```{r}
