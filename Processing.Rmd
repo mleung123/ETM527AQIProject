@@ -2,7 +2,9 @@
 title: "AQIProject"
 author: "Mick Leungpathomaram"
 date: "2026-02-13"
-output: pdf_document
+output:
+  word_document: default
+  pdf_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -44,13 +46,23 @@ missing_summary <- aqi %>%
   mutate(pct_missing = n_missing / nrow(aqi) * 100) %>%
   arrange(desc(n_missing))
 missing_summary
+
+# Drop variables with > 50% missing data. We may need to add these back in. It is hurting the R2 of linear regression model.
+aqi <- aqi %>%
+  select(-PM25_ugm3, -PM10_ugm3)
+
+# Drop records that are missing the target variable, as imputation would be unreliable and could bias the model.
+aqi_clean <- aqi %>% 
+  filter(!is.na(Ozone_ppm))
 ```
+
+Variables with greater than 50% missingness or missing the target variable were removed to prevent unstable imputation and model distortion.
 
 ```{r}
 
-aqi_clean <- aqi %>% 
-  filter(!is.na(Ozone_ppm))
-
+# Applied median imputation for remaining numeric variables, as it's more robust to outliers than mean imputation.
+aqi_clean <- aqi %>%
+  mutate(across(where(is.numeric), ~ifelse(is.na(.), mean(., na.rm = TRUE), .)))
 ```
 
 
@@ -111,8 +123,8 @@ corrplot(cor_matrix)
 Mostly variables I'd expect to be correlated with one another. 
 
 
-Regression Code
-```{r}
+
+<!-- ```{r}
 set.seed(1)
 
 #  train-validation-test follows a 50-30-20 split.
@@ -123,9 +135,22 @@ temp_data <- lr_data[-train_idx, ]
 val_idx <- createDataPartition(temp_data$Ozone_ppm, p = 0.6, list = FALSE)
 val_data <- temp_data[val_idx, ]
 test_data <- temp_data[-val_idx, ]
-```
+``` -->
+**Split Data**
+```{r}
+# Time based train / Test split
 
-Currently uses all predictors. 
+aqi_clean <- aqi_clean %>%
+  mutate(Year = lubridate::year(Date))
+
+train_data <- aqi_clean %>% filter(Year %in% c(2019, 2020))
+test_data  <- aqi_clean %>% filter(Year == 2021)
+
+dim(train_data)
+dim(test_data)
+
+```
+**Regression Code. Currently uses all predictors.**
 ```{r}
 formula_full <- as.formula(paste("Ozone_ppm ~", paste(predictors, collapse = " + ")))
 lm_full <- lm(formula_full, data = train_data)
@@ -133,6 +158,7 @@ lm_full <- lm(formula_full, data = train_data)
 
 summary(lm_full)
 ```
+
 
 ```{r}
 trControl <- trainControl(method = "none")
@@ -184,8 +210,10 @@ print(subset_metrics)
 
 Try removing predictors where p >0.05. (CO_ppm and Pressure_kPa)
 ```{r}
-significant_vars <- c("PM25_ugm3", "NO2_ppb_or_ppm", "SO2_ppb_or_ppm", "PM10_ugm3",
+significant_vars <- c("NO2_ppb_or_ppm", "SO2_ppb_or_ppm", 
                       "Wind2m_ms", "DewPoint_C", "Precip_mm", "Solar_Wm2", "DayOfYear")
+# removed these two for now "PM25_ugm3", "PM10_ugm3", but may need to add these back in. R2 is much worse without them 
+
 formula_reduced <- as.formula(paste("Ozone_ppm ~", paste(significant_vars, collapse = " + ")))
 lm_reduced <- lm(formula_reduced, data = train_data)
 
