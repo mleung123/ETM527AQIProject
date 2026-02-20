@@ -1,6 +1,6 @@
 ---
 title: "AQIProject"
-author: "Mick Leungpathomaram"
+author: "Jennifer Scott, Thammik Leungpathomaram"
 date: "2026-02-13"
 output:
   word_document: default
@@ -26,9 +26,6 @@ library(leaps)
 
 ```{r}
 source("config.R")
-
-
-
 aqi <- read.csv(csv_path)
 ```
 
@@ -47,13 +44,17 @@ missing_summary <- aqi %>%
   arrange(desc(n_missing))
 missing_summary
 
-# Drop variables with > 50% missing data. We may need to add these back in. It is hurting the R2 of linear regression model.
-aqi <- aqi %>%
-  select(-PM25_ugm3, -PM10_ugm3)
 
-# Drop records that are missing the target variable, as imputation would be unreliable and could bias the model.
+
+
 aqi_clean <- aqi %>% 
+# Drop variables with > 50% missing data. We may need to add these back in. It is hurting the R2 of linear regression model.
+  select(-PM25_ugm3, -PM10_ugm3) %>%
+# Drop records that are missing the target variable, as imputation would be unreliable and could bias the model.
   filter(!is.na(Ozone_ppm))
+
+aqi_clean$Date<-as.Date(aqi_clean$Date)
+
 ```
 
 Variables with greater than 50% missingness or missing the target variable were removed to prevent unstable imputation and model distortion.
@@ -61,7 +62,7 @@ Variables with greater than 50% missingness or missing the target variable were 
 ```{r}
 
 # Applied median imputation for remaining numeric variables, as it's more robust to outliers than mean imputation.
-aqi_clean <- aqi %>%
+aqi_clean <- aqi_clean %>%
   mutate(across(where(is.numeric), ~ifelse(is.na(.), mean(., na.rm = TRUE), .)))
 ```
 
@@ -83,6 +84,59 @@ ggplot(aqi_clean, aes(y = Ozone_ppm)) +
   theme_minimal()
 ```
 
+
+```{r}
+
+ggplot(aqi_clean %>% filter(!is.na(Ozone_ppm)), 
+       aes(x = Date, y = Ozone_ppm, color = as.factor(Year))) +
+  geom_point(alpha = 0.6) +
+  scale_x_date(date_breaks = "3 months", date_labels = "%b %Y") +
+  labs(title = "Ozone Levels Over Time (2019-2021)",
+       x = "Date", y = "Ozone (ppm)", color = "Ozone Level") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Same thing but dot plot instead. Trying to decide which one is better.
+
+ggplot(aqi_clean, aes(x = Date, y = Ozone_ppm, color = as.factor(Year))) +
+  geom_line(alpha = 0.6) +
+  geom_smooth(aes(group = 1), method = "loess", formula = y ~ x, 
+              color = "black", se = TRUE, alpha = 0.2) +
+  scale_x_date(date_breaks = "3 months", date_labels = "%b %Y") +
+  labs(title = "Ozone Levels Over Time (2019-2021)",
+       x = "Date", y = "Ozone (ppm)", color = "Year") +
+  theme_linedraw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+```{r}
+
+
+ggplot(aqi_clean, aes(x = DayOfYear, y = Ozone_ppm)) +
+  geom_point(alpha = 0.3, color = "steelblue") +
+  geom_smooth(formula = y~x, method = "loess", color = "red", se = TRUE) +
+  scale_x_continuous(breaks = c(1, 91, 182, 274, 365),
+                     labels = c("Jan 1", "Apr 1", "Jul 1", "Oct 1", "Dec 31")) +
+  labs(title = "Seasonal Pattern in Ozone Levels",
+       x = "Day of Year", y = "Ozone (ppm)") +
+  theme_minimal()
+
+```
+
+```{r}
+ggplot(aqi_clean, aes(x = as.factor(Month), y = Ozone_ppm)) +
+  geom_boxplot(fill = "steelblue", alpha = 0.7) +
+  labs(title = "Ozone Distribution by Month",
+       x = "Month", y = "Ozone (ppm)") +
+  theme_minimal()
+```
+
+
+
+
+
+**Model Creation**
 
 ```{r}
 #arbitrarily chose the temperature mean, and wind2m. DayOfYear for date purposes.
