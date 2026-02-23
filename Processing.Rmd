@@ -21,6 +21,8 @@ library(caret)
 library(corrplot)
 library(tidyr)
 library(leaps)
+library(forecast)
+library(zoo)
 ```
 
 
@@ -32,7 +34,7 @@ aqi <- read.csv(csv_path)
 
 ```{r}
 #str(aqi)
-summary(aqi)
+#summary(aqi)
 ```
 
 
@@ -44,16 +46,27 @@ missing_summary <- aqi %>%
   arrange(desc(n_missing))
 missing_summary
 
+aqi$Date<-as.Date(aqi$Date)
 
+impute<-FALSE
 
 
 aqi_clean <- aqi %>% 
 # Drop variables with > 50% missing data. We may need to add these back in. It is hurting the R2 of linear regression model.
-  select(-PM25_ugm3, -PM10_ugm3) %>%
-# Drop records that are missing the target variable, as imputation would be unreliable and could bias the model.
-  filter(!is.na(Ozone_ppm))
+  select(-PM25_ugm3, -PM10_ugm3)
 
-aqi_clean$Date<-as.Date(aqi_clean$Date)
+# Not having continuous data significantly complicates time series models.
+# As such the below code will impute the missing days via linear interpolation.
+# Also, ozone is an environmental variable, and as such changes slowly, which lessens the issues that this might cause.
+if (impute){
+  aqi$Ozone_ppm <- na.approx(aqi$Ozone_ppm, na.rm = FALSE)
+} else {
+  # Drop records that are missing the target variable, as imputation would be unreliable and could bias the model.
+  aqi_clean<-filter(aqi,!is.na(Ozone_ppm))
+}
+
+# Quick check of the missing days. 29 days, consisting of stretches between 3-12 days.
+#missing_days <-aqi[is.na(aqi$Ozone_ppm), ]$Date
 
 ```
 
@@ -204,15 +217,33 @@ dim(train_data)
 dim(test_data)
 
 ```
-**Regression Code. Currently uses all predictors.**
+**Regression Code**
+
 ```{r}
 formula_full <- as.formula(paste("Ozone_ppm ~", paste(predictors, collapse = " + ")))
 lm_full <- lm(formula_full, data = train_data)
-
-
 summary(lm_full)
-```
 
+cat("Train Adj R^2:", summary(lm_full)$adj.r.squared, "\n")
+
+pred <- predict(lm_full, test_data)
+actual <- test_data$Ozone_ppm
+ss_res <- sum((actual - pred)^2)
+ss_tot <- sum((actual - mean(actual))^2)
+test_r2 <- 1 - ss_res / ss_tot
+n_test <- nrow(test_data)
+p <- length(coef(lm_full)) - 1
+test_adj_r2 <- 1 - (1 - test_r2) * (n_test - 1) / (n_test - p - 1)
+cat("Test Adj R^2: ", test_adj_r2, "\n")
+```
+Without Imputation:
+Train Adj R^2: 0.6276748 
+Test Adj R^2:  0.281179 
+
+With Imputation:
+
+Train Adj R^2: 0.593237 
+Test Adj R^2:  0.2684621 
 
 ```{r}
 trControl <- trainControl(method = "none")
@@ -230,47 +261,168 @@ model_stepwise <- train(
 
 ```{r}
 lm_stepwise <- model_stepwise$finalModel
-
-coef(lm_stepwise)
 ```
+
+
 ```{r}
-summary(lm_stepwise)
-lm_stepwise_r2<-1 - (lm_stepwise$deviance / lm_stepwise$null.deviance)
+
+lm_stepwise_r2 <- 1 - (lm_stepwise$deviance / lm_stepwise$null.deviance)
 n <- nrow(train_data)
 p <- length(coef(lm_stepwise)) - 1
 lm_stepwise_adj_r2 <- 1 - (1 - lm_stepwise_r2) * (n - 1) / (n - p - 1)
-lm_stepwise_r2
-lm_stepwise_adj_r2
-```
+summary(lm_stepwise)
+cat("Train Adj R^2:", lm_stepwise_adj_r2, "\n")
 
+pred <- predict(lm_stepwise, test_data)
+actual <- test_data$Ozone_ppm
+ss_res <- sum((actual - pred)^2)
+ss_tot <- sum((actual - mean(actual))^2)
+test_r2 <- 1 - ss_res / ss_tot
+n_test <- nrow(test_data)
+test_adj_r2 <- 1 - (1 - test_r2) * (n_test - 1) / (n_test - p - 1)
+cat("Test Adj R^2: ", test_adj_r2, "\n")
+
+
+```
+With Imputation:
+Train Adj R^2: 0.5937668 
+Test Adj R^2:  0.2704882 
+
+
+Without Imputation:
+Train Adj R^2: 0.6280177 
+Test Adj R^2:  0.281659 
 Only removes 1 predictor... Forward and backward have similar performance. Tried using best subset selection instead, but there's way too many predictors for that.
 
-72% is decent, but 11 predictors is a lot.
-```{r}
+62% is decent, but 11 predictors is a lot.
 
-regfit_full <- regsubsets(formula_full, data = train_data, nvmax = 19)
-reg_summary <- summary(regfit_full)
-print(reg_summary)
-
-subset_metrics <- data.frame(
-  n_predictors = 1:length(reg_summary$rsq),
-  rsq = reg_summary$rsq,
-  adj_rsq = reg_summary$adjr2,
-  cp = reg_summary$cp,
-  bic = reg_summary$bic
-)
-print(subset_metrics)
-```
 
 Try removing predictors where p >0.05. (CO_ppm and Pressure_kPa)
 ```{r}
+# removed these two for now "PM25_ugm3", "PM10_ugm3", but may need to add these back in. R2 is much worse without them 
+
 significant_vars <- c("NO2_ppb_or_ppm", "SO2_ppb_or_ppm", 
                       "Wind2m_ms", "DewPoint_C", "Precip_mm", "Solar_Wm2", "DayOfYear")
-# removed these two for now "PM25_ugm3", "PM10_ugm3", but may need to add these back in. R2 is much worse without them 
 
 formula_reduced <- as.formula(paste("Ozone_ppm ~", paste(significant_vars, collapse = " + ")))
 lm_reduced <- lm(formula_reduced, data = train_data)
-
 summary(lm_reduced)
+
+cat("Train Adj R^2:", summary(lm_reduced)$adj.r.squared, "\n")
+
+pred <- predict(lm_reduced, test_data)
+actual <- test_data$Ozone_ppm
+ss_res <- sum((actual - pred)^2)
+ss_tot <- sum((actual - mean(actual))^2)
+test_r2 <- 1 - ss_res / ss_tot
+n_test <- nrow(test_data)
+p <- length(coef(lm_reduced)) - 1
+test_adj_r2 <- 1 - (1 - test_r2) * (n_test - 1) / (n_test - p - 1)
+cat("Test Adj R^2: ", test_adj_r2, "\n")
 ```
-Considering the minimal R^2 loss, I'd consider this to be a reasonable tradeoff for having 2 fewer predictors.
+
+With Imputation:
+Train Adj R^2: 0.5363423 
+Test Adj R^2:  0.3739211 
+
+Without:
+
+Train Adj R^2: 0.5819515 
+Test Adj R^2:  0.2246784 
+
+Acf Plot
+
+```{r}
+
+ozone.ts <- ts(train_data$Ozone_ppm, frequency = 365.25,
+               start = c(as.numeric(format(min(train_data$Date), "%Y")),
+                         as.numeric(format(min(train_data$Date), "%j"))))
+
+# ACF plot
+Acf(ozone.ts)
+
+```
+
+Very strong seasonality, with high ACF levels most of the way up to lag 200, and clear sinusoidal pattern.
+
+
+# Since having dummy variables for each day would be impractical, I decided to use Fourier terms instead. We use the below plot to find the optimal K value. 
+```{r}
+k_values <- 1:10
+aic_values <- sapply(k_values, function(k) {
+  formula <- as.formula(paste("ozone.ts ~ trend + fourier(ozone.ts, K=", k, ") +", 
+                               paste(significant_vars, collapse = " + ")))
+  fit <- tslm(formula, data = train_data)
+  return(AIC(fit))
+})
+
+ggplot(data.frame(K = k_values, AIC = aic_values), aes(x = K, y = AIC)) +
+  geom_line() +
+  geom_point() +
+  scale_x_continuous(breaks = k_values) +
+  labs(title = "AIC vs Number of Fourier Terms (K)", x = "K", y = "AIC") +
+  theme_minimal()
+```
+Based on the plot K=3 or 5 is ideal.
+
+
+```{r}
+# tslm without predictors
+# very weak results (adjr^2=0.286)
+
+#ozone.tslm <- tslm(ozone.ts ~ trend + fourier(ozone.ts, K=3))
+#summary(ozone.tslm)
+```
+
+```{r}
+
+
+# tslm with predictors. 
+formula1 <- as.formula(paste("ozone.ts ~ trend + fourier(ozone.ts, K=3) +", 
+                             paste(predictors, collapse = " + ")))
+
+formula2 <- as.formula(paste("ozone.ts ~ trend + fourier(ozone.ts, K=3) +", 
+                             paste(significant_vars, collapse = " + ")))
+
+ozone.tslm.fourier1 <- tslm(formula1, data = train_data)
+ozone.tslm.fourier2 <- tslm(formula2, data = train_data)
+
+#summary(ozone.tslm.fourier1)
+summary(ozone.tslm.fourier1)$adj.r.squared
+summary(ozone.tslm.fourier2)$adj.r.squared
+```
+With imputation: Adj R^2 of 66.6
+
+Without imputation: Adjusted R^2 of 70.45% with K=5. Strong results, although this model has 22 predictors.
+
+```{r}
+test.ts <- ts(test_data$Ozone_ppm, frequency = 365,
+              start = c(2021, 1))
+#Doesn't work. TODO: troubleshoot this more.
+#pred <- forecast(ozone.tslm.fourier1, newdata = test_data)
+pred <- predict(ozone.tslm.fourier1, newdata = test_data)
+
+accuracy(pred, test_data$Ozone_ppm)
+```
+
+
+
+Predictor-less ARIMA
+```{r}
+ozone.arima <- auto.arima(ozone.ts)
+summary(ozone.arima)
+
+```
+
+ARIMA with Predictors
+```{r}
+f
+xreg_matrix <- as.matrix(train_data[, c("NO2_ppb_or_ppm", "CO_ppm", "SO2_ppb_or_ppm", 
+                                         "Temp_C", "Wind2m_ms", "RH_percent", 
+                                         "DewPoint_C", "Precip_mm", "Pressure_kPa", 
+                                         "Solar_Wm2", "DayOfYear")])
+
+ozone.arima.xreg <- auto.arima(ozone.ts, xreg = xreg_matrix)
+summary(ozone.arima.xreg)
+```
+using predictors somehow makes ARIMA worse. 
