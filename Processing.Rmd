@@ -377,7 +377,7 @@ Based on the plot K=3 or 5 is ideal.
 ```{r}
 
 
-# tslm with predictors. 
+# fourier tslm with predictors. 
 formula1 <- as.formula(paste("ozone.ts ~ trend + fourier(ozone.ts, K=3) +", 
                              paste(predictors, collapse = " + ")))
 
@@ -404,6 +404,51 @@ pred <- predict(ozone.tslm.fourier1, newdata = test_data)
 
 accuracy(pred, test_data$Ozone_ppm)
 ```
+
+
+
+Normal tlsm
+```{r}
+train_monthly <- train_data %>%
+  group_by(Year, Month) %>%
+  summarise(across(where(is.numeric), mean, na.rm = TRUE))
+
+test_monthly <- test_data %>%
+  group_by(Year, Month) %>%
+  summarise(across(where(is.numeric), mean, na.rm = TRUE))
+
+ozone.ts.monthly <- ts(train_monthly$Ozone_ppm, frequency = 12, start = c(2019, 1))
+
+#formula1 <- as.formula(paste("ozone.ts.monthly ~ trend + season +", paste(predictors, collapse = " + ")))
+ts_vars <- c("NO2_ppb_or_ppm", "SO2_ppb_or_ppm", "Wind2m_ms", 
+                      "DewPoint_C", "Precip_mm", "Solar_Wm2")
+
+formula2 <- as.formula(paste("ozone.ts.monthly ~ trend + season +", paste(ts_vars, collapse = " + ")))
+
+#ozone.tslm.monthly1 <- tslm(formula1, data = train_monthly)
+ozone.tslm.monthly2 <- tslm(formula2, data = train_monthly)
+
+#cat("Train Adj R^2 (formula1):", summary(ozone.tslm.monthly1)$adj.r.squared, "\n")
+cat("Train Adj R^2 (formula2):", summary(ozone.tslm.monthly2)$adj.r.squared, "\n")
+
+```
+
+
+
+
+```{r}
+test.ts.monthly <- ts(test_monthly$Ozone_ppm, frequency = 12, start = c(2021, 1))
+
+#forecast1 <- forecast(ozone.tslm.monthly1, newdata = test_monthly)
+forecast2 <- forecast(ozone.tslm.monthly2, newdata = test_monthly[, significant_vars])
+
+#cat("Train Adj R^2 (formula1):", summary(ozone.tslm.monthly1)$adj.r.squared, "\n")
+cat("Train Adj R^2 (formula2):", summary(ozone.tslm.monthly2)$adj.r.squared, "\n")
+
+#accuracy(forecast1, test.ts.monthly)
+accuracy(forecast2, test.ts.monthly)
+```
+
 
 
 
