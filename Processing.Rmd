@@ -11,7 +11,7 @@ output:
 knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
 ```
 
-## 1. Introduction
+# 1. Introduction
 
 This project uses daily air quality and weather observations for Portland (2019–2021) to:
 
@@ -28,7 +28,7 @@ This project uses daily air quality and weather observations for Portland (2019�
 Our primary goal is interpretability and sound evaluation rather than maximizing the number of algorithms implemented.
 
 
-## 2.Library Block
+# 2.Library Block
 
 ```{r library block}
 library(utils)
@@ -41,7 +41,8 @@ library(leaps)
 library(forecast)
 library(zoo)
 ```
-## 3. Data Loading
+
+# 3. Data Loading
 
 ```{r data loading}
 source("config.R")
@@ -54,9 +55,9 @@ aqi <- read.csv(csv_path)
 #summary(aqi)
 ```
 
-## 4. Missing Data Review and Cleaning Strategy
+# 4. Missing Data Review and Cleaning Strategy
 
-# 4.1 Missingness summary
+## 4.1 Missingness summary
 
 We begin by summarizing missing values for each field. This helps us decide which variables require imputation and whether any fields should be excluded due to excessive missingness.
 
@@ -74,7 +75,7 @@ aqi$Date<-as.Date(aqi$Date)
 # impute<-FALSE # I think we should remove this
 ```
 
-# 4.2 Handling missing target values (Ozone_ppm)
+## 4.2 Handling missing target values (Ozone_ppm)
 We do not impute the target variable (ozone). Rows missing the target are removed from modeling datasets.
 
 ```{r missing target values}
@@ -85,7 +86,7 @@ aqi_clean <- aqi %>%
 ```
 
 
-# 4.3 Impute remaining numeric predictors
+## 4.3 Impute remaining numeric predictors
 
 For predictor variables, we impute missing numeric values using a simple strategy.
 
@@ -104,9 +105,9 @@ aqi_clean <- aqi_clean %>%
 
 ```
 
-## 5. Exploratory Data Analysis
+# 5. Exploratory Data Analysis
 
-# 5.1 Ozone distribution
+## 5.1 Ozone distribution
 
 ```{r}
 ggplot(aqi_clean, aes(x = Ozone_ppm)) +
@@ -124,7 +125,7 @@ ggplot(aqi_clean, aes(y = Ozone_ppm)) +
   theme_minimal()
 ```
 
-# 5.2 Ozone over time
+## 5.2 Ozone over time
 
 This plot helps identify long-term trend and year-to-year differences.
 
@@ -156,7 +157,7 @@ ggplot(aqi_clean, aes(x = Date, y = Ozone_ppm, color = as.factor(Year))) +
 
 ```
 
-# 5.3 Seasonality (Day of Year)
+## 5.3 Seasonality (Day of Year)
 
 ```{r}
 
@@ -180,7 +181,7 @@ ggplot(aqi_clean, aes(x = as.factor(Month), y = Ozone_ppm)) +
   theme_minimal()
 ```
 
-## 6. Train/Test Split (Time Based)
+# 6. Train/Test Split (Time Based)
 
 To prevent “peeking into the future,” we split chronologically:
 
@@ -198,9 +199,9 @@ dim(test_data)
 
 ```
 
-## 7. Regression Modeling (Predict Ozone)
+# 7. Regression Modeling (Predict Ozone)
 
-# 7.1 Define predictors (avoid leakage)
+## 7.1 Define predictors (avoid leakage)
 
 We avoid variables that are direct transformations of the target or derived from it.
 
@@ -219,7 +220,7 @@ predictors <- setdiff(all_numeric, leakage_vars)
 
 ```
 
-# 7.2 Correlation review (drop zero-variance columns first)
+## 7.2 Correlation review (drop zero-variance columns first)
 
 ```{r correlation review}
 
@@ -249,7 +250,7 @@ corrplot(cor_matrix)
 
 ```
 
-# 7.3 Baseline linear regression
+## 7.3 Baseline linear regression
 
 ```{r linear regression}
 
@@ -281,7 +282,7 @@ cat("Linear Regression (Test 2021): RMSE =", rmse_lm,
 
 ```
 
-# 7.4 Reduced linear regression (parsimony)
+## 7.4 Reduced linear regression (parsimony)
 
 A reduced model improves interpretability and may generalize better.
 
@@ -302,7 +303,7 @@ cat("Reduced LM (Test 2021): RMSE =", RMSE(pred_red, obs_red),
 
 ```
 
-## Stepwise 
+# Stepwise 
 
 ```{r}
 trControl <- trainControl(method = "none")
@@ -390,9 +391,9 @@ Train Adj R^2: 0.5819515
 Test Adj R^2:  0.2246784 
 
 
-## 8. Seasonality and Fourier Time_Series Regression
+# 8. Seasonality and Fourier Time_Series Regression
 
-# 8.1 Autocorrelation (ACF)
+## 8.1 Autocorrelation (ACF)
 
 ```{r autocorrelation}
 
@@ -404,7 +405,7 @@ Acf(ozone_train_ts, main = "ACF of Daily Ozone (Train: 2019–2020)")
 A slowly decaying ACF and repeating structure suggests strong seasonality. For ozone, this is expected due to sunlight-driven chemistry and summer weather patterns.
 
 
-# 8.2 Select Fourier comlexity (K)
+## 8.2 Select Fourier comlexity (K)
 
 We use AIC to select the number of Fourier harmonics (K). Larger K captures more complex seasonal shape but risks overfitting.
 
@@ -456,7 +457,7 @@ With imputation: Adj R^2 of 66.6
 
 Without imputation: Adjusted R^2 of 70.45% with K=5. Strong results, although this model has 22 predictors.
 
-# 8.3 Fit Fourier + predictors and forecast 2021 properly
+## 8.3 Fit Fourier + predictors and forecast 2021 properly
 
 This is the corrected out-of-sample evaluation. We:
 
@@ -501,9 +502,9 @@ accuracy(fc$mean, test_data$Ozone_ppm)
 
 ```
 
-## 9. classification Modeling (Logistic Regression)
+# 9. classification Modeling (Logistic Regression)
 
-# 9.1 Define classification target
+## 9.1 Define classification target
 
 We classify days as “Orange or worse” using the AQI indicator already in the dataset:
 
@@ -518,7 +519,7 @@ test_cls <- test_data %>%
 
 ```
 
-# 9.2 Logistic regression (interpretable classifier)
+## 9.2 Logistic regression (interpretable classifier)
 We use a small, interpretable set of predictors (similar to regression drivers).
 
 ```{r}
@@ -532,7 +533,7 @@ summary(logit_model)
 
 ```
 
-## 10. PCA (Dimension Reduction)
+# 10. PCA (Dimension Reduction)
 
 PCA is used here to reduce redundancy among correlated weather variables. We:
 
@@ -544,7 +545,7 @@ PCA is used here to reduce redundancy among correlated weather variables. We:
 
 - optionally refit regression using PCs
 
-# 10.1 Prepare PCA predictors
+## 10.1 Prepare PCA predictors
 
 ```{r}
 
@@ -563,7 +564,7 @@ summary(pca_fit)
 
 ```
 
-# 10.2 Interpret component loadings
+## 10.2 Interpret component loadings
 
 ```{r}
 
@@ -572,7 +573,7 @@ head(loadings)
 
 ```
 
-# 10.3 Regression using PCs
+## 10.3 Regression using PCs
 We use enough PCs to explain ~80-90% variance.
 
 ```{r}
@@ -610,7 +611,7 @@ cat("PCA Regression (Test 2021): RMSE =", RMSE(pred_pca, test_data$Ozone_ppm),
 ```
 
 
-## Don't what to do with these sections below just yet
+# Don't what to do with these sections below just yet
 Normal tlsm
 ```{r}
 train_monthly <- train_data %>%
