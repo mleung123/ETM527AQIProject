@@ -1,5 +1,5 @@
 ---
-title: "AQIProject"
+title: "Portland Air Quality Data Mining Project"
 author: "Jennifer Scott, Thammik Leungpathomaram"
 date: "2026-02-13"
 output:
@@ -8,12 +8,29 @@ output:
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
 ```
 
-Library Block
+## 1. Introduction
 
-```{r}
+This project uses daily air quality and weather observations for Portland (2019–2021) to:
+
+1. Predict daily ozone concentration (regression)
+
+2. Classify unhealthy air quality days using AQI categories (classification)
+
+3. Evaluate models using a time-based split (train: 2019–2020, test: 2021)
+
+4. Explore seasonality using autocorrelation and Fourier terms
+
+5. Apply PCA to address multicollinearity among weather variables (dimension reduction)
+
+Our primary goal is interpretability and sound evaluation rather than maximizing the number of algorithms implemented.
+
+
+## 2.Library Block
+
+```{r library block}
 library(utils)
 library(ggplot2)
 library(dplyr)
@@ -24,9 +41,9 @@ library(leaps)
 library(forecast)
 library(zoo)
 ```
+## 3. Data Loading
 
-
-```{r}
+```{r data loading}
 source("config.R")
 aqi <- read.csv(csv_path)
 ```
@@ -37,49 +54,59 @@ aqi <- read.csv(csv_path)
 #summary(aqi)
 ```
 
+## 4. Missing Data Review and Cleaning Strategy
 
-```{r}
+# 4.1 Missingness summary
+
+We begin by summarizing missing values for each field. This helps us decide which variables require imputation and whether any fields should be excluded due to excessive missingness.
+
+```{r missing data summary}
 missing_summary <- aqi %>%
   summarise(across(everything(), ~sum(is.na(.)))) %>%
   pivot_longer(everything(), names_to = "variable", values_to = "n_missing") %>%
   mutate(pct_missing = n_missing / nrow(aqi) * 100) %>%
   arrange(desc(n_missing))
+
 missing_summary
 
 aqi$Date<-as.Date(aqi$Date)
 
-impute<-FALSE
+# impute<-FALSE # I think we should remove this
+```
+
+# 4.2 Handling missing target values (Ozone_ppm)
+We do not impute the target variable (ozone). Rows missing the target are removed from modeling datasets.
+
+```{r missing target values}
+
+# Drop records that are missing the target variable, as imputation would be unreliable and could bias the model.
+aqi_clean <- aqi %>%
+  filter(!is.na(Ozone_ppm))
+```
 
 
-aqi_clean <- aqi %>% 
-# Drop variables with > 50% missing data. We may need to add these back in. It is hurting the R2 of linear regression model.
-  select(-PM25_ugm3, -PM10_ugm3)
+# 4.3 Impute remaining numeric predictors
 
-# Not having continuous data significantly complicates time series models.
-# As such the below code will impute the missing days via linear interpolation.
-# Also, ozone is an environmental variable, and as such changes slowly, which lessens the issues that this might cause.
-if (impute){
-  aqi$Ozone_ppm <- na.approx(aqi$Ozone_ppm, na.rm = FALSE)
-} else {
-  # Drop records that are missing the target variable, as imputation would be unreliable and could bias the model.
-  aqi_clean<-filter(aqi,!is.na(Ozone_ppm))
-}
+For predictor variables, we impute missing numeric values using a simple strategy.
+
+```{r impute remaining predictors}
+
+impute_method <- "median" # mean can be used as well
+
+impute_fun <- if (impute_method == "median") median else mean
+
+aqi_clean <- aqi_clean %>%
+  mutate(across(where(is.numeric),
+                ~ifelse(is.na(.), impute_fun(., na.rm = TRUE), .)))
 
 # Quick check of the missing days. 29 days, consisting of stretches between 3-12 days.
 #missing_days <-aqi[is.na(aqi$Ozone_ppm), ]$Date
 
 ```
 
-Variables with greater than 50% missingness or missing the target variable were removed to prevent unstable imputation and model distortion.
+## 5. Exploratory Data Analysis
 
-```{r}
-
-# Applied median imputation for remaining numeric variables, as it's more robust to outliers than mean imputation.
-aqi_clean <- aqi_clean %>%
-  mutate(across(where(is.numeric), ~ifelse(is.na(.), mean(., na.rm = TRUE), .)))
-```
-
-
+# 5.1 Ozone distribution
 
 ```{r}
 ggplot(aqi_clean, aes(x = Ozone_ppm)) +
@@ -97,9 +124,13 @@ ggplot(aqi_clean, aes(y = Ozone_ppm)) +
   theme_minimal()
 ```
 
+# 5.2 Ozone over time
+
+This plot helps identify long-term trend and year-to-year differences.
 
 ```{r}
 
+# dot plot
 ggplot(aqi_clean %>% filter(!is.na(Ozone_ppm)), 
        aes(x = Date, y = Ozone_ppm, color = as.factor(Year))) +
   geom_point(alpha = 0.6) +
@@ -109,19 +140,23 @@ ggplot(aqi_clean %>% filter(!is.na(Ozone_ppm)),
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
-# Same thing but dot plot instead. Trying to decide which one is better.
+# line chart
+
+aqi_clean <- aqi_clean %>%
+  mutate(Year = lubridate::year(Date))
 
 ggplot(aqi_clean, aes(x = Date, y = Ozone_ppm, color = as.factor(Year))) +
   geom_line(alpha = 0.6) +
-  geom_smooth(aes(group = 1), method = "loess", formula = y ~ x, 
-              color = "black", se = TRUE, alpha = 0.2) +
+  geom_smooth(aes(group = 1), method = "loess", se = TRUE, alpha = 0.2) +
   scale_x_date(date_breaks = "3 months", date_labels = "%b %Y") +
-  labs(title = "Ozone Levels Over Time (2019-2021)",
+  labs(title = "Ozone Levels Over Time (2019–2021)",
        x = "Date", y = "Ozone (ppm)", color = "Year") +
-  theme_linedraw() +
+  theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
 ```
+
+# 5.3 Seasonality (Day of Year)
 
 ```{r}
 
@@ -145,70 +180,15 @@ ggplot(aqi_clean, aes(x = as.factor(Month), y = Ozone_ppm)) +
   theme_minimal()
 ```
 
+## 6. Train/Test Split (Time Based)
 
+To prevent “peeking into the future,” we split chronologically:
 
+- Train: 2019–2020
 
+- Test: 2021
 
-**Model Creation**
-
-```{r}
-#arbitrarily chose the temperature mean, and wind2m. DayOfYear for date purposes.
-predictors <- aqi_clean %>%
-  #select(where(is.numeric)) %>%
-  select(-Ozone_ppm, -Ozone_ppb, -Ozone_HighDay, -TempMax_C, -TempMin_C, -Year,-Month,-DayOfWeek,-Date,-Wind10m_ms) %>%
-  names()
-
-#regression
-lr_data <- aqi_clean %>%
-  select(Ozone_ppm, all_of(predictors)) %>%
-  drop_na()
-
-
-```
-
-
-Correlations
-```{r}
-cor_matrix <- cor(lr_data)
-
-high_cor <- which(abs(cor_matrix) > 0.7, arr.ind = TRUE)
-high_cor_pairs <- data.frame(
-  var1 = rownames(cor_matrix)[high_cor[,1]],
-  var2 = colnames(cor_matrix)[high_cor[,2]],
-  correlation = cor_matrix[high_cor]
-) %>%
-  distinct() %>%
-  filter(var1!=var2) %>%
-  # Removes 'duplicate' pairs
-  filter(!duplicated(paste(pmin(var1, var2), pmax(var1, var2)))) %>%
-  arrange(desc(abs(correlation)))
-high_cor_pairs
-
-corrplot(cor_matrix)
-
-```
-Mostly variables I'd expect to be correlated with one another. 
-
-
-
-<!-- ```{r}
-set.seed(1)
-
-#  train-validation-test follows a 50-30-20 split.
-train_idx <- createDataPartition(lr_data$Ozone_ppm, p = 0.5, list = FALSE)
-train_data <- lr_data[train_idx, ]
-temp_data <- lr_data[-train_idx, ]
-
-val_idx <- createDataPartition(temp_data$Ozone_ppm, p = 0.6, list = FALSE)
-val_data <- temp_data[val_idx, ]
-test_data <- temp_data[-val_idx, ]
-``` -->
-**Split Data**
-```{r}
-# Time based train / Test split
-
-aqi_clean <- aqi_clean %>%
-  mutate(Year = lubridate::year(Date))
+```{r split data}
 
 train_data <- aqi_clean %>% filter(Year %in% c(2019, 2020))
 test_data  <- aqi_clean %>% filter(Year == 2021)
@@ -217,33 +197,112 @@ dim(train_data)
 dim(test_data)
 
 ```
-**Regression Code**
 
-```{r}
+## 7. Regression Modeling (Predict Ozone)
+
+# 7.1 Define predictors (avoid leakage)
+
+We avoid variables that are direct transformations of the target or derived from it.
+
+- Ozone_ppb is a deterministic transform of Ozone_ppm
+
+- AQI and AQI_Ozone can include ozone information and cause leakage
+
+```{r define predictors}
+all_numeric <- train_data %>% select(where(is.numeric)) %>% names()
+
+leakage_vars <- c("Ozone_ppm", "Ozone_ppb", "AQI", "AQI_Ozone")
+predictors <- setdiff(all_numeric, leakage_vars)
+
+# Optional: if wee need to remove additional fields
+# predictors <- setdiff(predictors, c("AQI_PM25"))
+
+```
+
+# 7.2 Correlation review (drop zero-variance columns first)
+
+```{r correlation review}
+
+lr_data <- train_data %>%
+  select(Ozone_ppm, all_of(predictors))
+
+nzv <- caret::nearZeroVar(lr_data)
+lr_data2 <- lr_data[, -nzv, drop = FALSE]
+
+cor_matrix <- cor(lr_data2, use = "pairwise.complete.obs")
+corrplot(cor_matrix)
+
+# high_cor <- which(abs(cor_matrix) > 0.7, arr.ind = TRUE)
+# high_cor_pairs <- data.frame(
+#   var1 = rownames(cor_matrix)[high_cor[,1]],
+#   var2 = colnames(cor_matrix)[high_cor[,2]],
+#   correlation = cor_matrix[high_cor]
+# ) %>%
+#   distinct() %>%
+#   filter(var1!=var2) %>%
+#   # Removes 'duplicate' pairs
+#   filter(!duplicated(paste(pmin(var1, var2), pmax(var1, var2)))) %>%
+#   arrange(desc(abs(correlation)))
+# high_cor_pairs
+# 
+# corrplot(cor_matrix)
+
+```
+
+# 7.3 Baseline linear regression
+
+```{r linear regression}
+
 formula_full <- as.formula(paste("Ozone_ppm ~", paste(predictors, collapse = " + ")))
 lm_full <- lm(formula_full, data = train_data)
 summary(lm_full)
 
 cat("Train Adj R^2:", summary(lm_full)$adj.r.squared, "\n")
 
-pred <- predict(lm_full, test_data)
-actual <- test_data$Ozone_ppm
-ss_res <- sum((actual - pred)^2)
-ss_tot <- sum((actual - mean(actual))^2)
-test_r2 <- 1 - ss_res / ss_tot
-n_test <- nrow(test_data)
-p <- length(coef(lm_full)) - 1
-test_adj_r2 <- 1 - (1 - test_r2) * (n_test - 1) / (n_test - p - 1)
-cat("Test Adj R^2: ", test_adj_r2, "\n")
 ```
-Without Imputation:
-Train Adj R^2: 0.6276748 
-Test Adj R^2:  0.281179 
 
-With Imputation:
+Evaluate on 2021 data:
 
-Train Adj R^2: 0.593237 
-Test Adj R^2:  0.2684621 
+```{r lm on 2021}
+
+pred_lm <- predict(lm_full, test_data)
+obs_lm  <- test_data$Ozone_ppm
+
+rmse_lm <- RMSE(pred_lm, obs_lm)
+mae_lm  <- MAE(pred_lm, obs_lm)
+
+ss_res <- sum((obs_lm - pred_lm)^2)
+ss_tot <- sum((obs_lm - mean(obs_lm))^2)
+r2_lm <- 1 - ss_res / ss_tot
+
+cat("Linear Regression (Test 2021): RMSE =", rmse_lm,
+    " MAE =", mae_lm,
+    " R^2 =", r2_lm, "\n")
+
+```
+
+# 7.4 Reduced linear regression (parsimony)
+
+A reduced model improves interpretability and may generalize better.
+
+```{r parsimony lm}
+
+significant_vars <- c("NO2_ppb_or_ppm", "SO2_ppb_or_ppm", 
+                      "Wind2m_ms", "DewPoint_C", "Precip_mm", "Solar_Wm2", "DayOfYear")
+
+formula_reduced <- as.formula(paste("Ozone_ppm ~", paste(significant_vars, collapse = " + ")))
+lm_reduced <- lm(formula_reduced, data = train_data)
+summary(lm_reduced)
+
+pred_red <- predict(lm_reduced, test_data)
+obs_red  <- test_data$Ozone_ppm
+
+cat("Reduced LM (Test 2021): RMSE =", RMSE(pred_red, obs_red),
+    " MAE =", MAE(pred_red, obs_red), "\n")
+
+```
+
+## Stepwise 
 
 ```{r}
 trControl <- trainControl(method = "none")
@@ -330,41 +389,43 @@ Without:
 Train Adj R^2: 0.5819515 
 Test Adj R^2:  0.2246784 
 
-Acf Plot
 
-```{r}
+## 8. Seasonality and Fourier Time_Series Regression
 
-ozone.ts <- ts(train_data$Ozone_ppm, frequency = 365.25,
-               start = c(as.numeric(format(min(train_data$Date), "%Y")),
-                         as.numeric(format(min(train_data$Date), "%j"))))
+# 8.1 Autocorrelation (ACF)
 
-# ACF plot
-Acf(ozone.ts)
+```{r autocorrelation}
+
+ozone_train_ts <- ts(train_data$Ozone_ppm, frequency = 365)
+Acf(ozone_train_ts, main = "ACF of Daily Ozone (Train: 2019–2020)")
 
 ```
 
-Very strong seasonality, with high ACF levels most of the way up to lag 200, and clear sinusoidal pattern.
+A slowly decaying ACF and repeating structure suggests strong seasonality. For ozone, this is expected due to sunlight-driven chemistry and summer weather patterns.
 
 
-# Since having dummy variables for each day would be impractical, I decided to use Fourier terms instead. We use the below plot to find the optimal K value. 
-```{r}
-k_values <- 1:10
-aic_values <- sapply(k_values, function(k) {
-  formula <- as.formula(paste("ozone.ts ~ trend + fourier(ozone.ts, K=", k, ") +", 
-                               paste(significant_vars, collapse = " + ")))
-  fit <- tslm(formula, data = train_data)
-  return(AIC(fit))
-})
+# 8.2 Select Fourier comlexity (K)
 
-ggplot(data.frame(K = k_values, AIC = aic_values), aes(x = K, y = AIC)) +
-  geom_line() +
-  geom_point() +
-  scale_x_continuous(breaks = k_values) +
-  labs(title = "AIC vs Number of Fourier Terms (K)", x = "K", y = "AIC") +
-  theme_minimal()
+We use AIC to select the number of Fourier harmonics (K). Larger K captures more complex seasonal shape but risks overfitting.
+
+```{r fourier}
+
+ k_values <- 1:10
+ aic_values <- sapply(k_values, function(k) {
+   formula <- as.formula(paste("ozone_train_ts ~ trend + fourier(ozone_train_ts, K=", k, ") +",
+                                paste(significant_vars, collapse = " + ")))
+   fit <- tslm(formula, data = train_data)
+   return(AIC(fit))
+ })
+
+  ggplot(data.frame(K = k_values, AIC = aic_values), aes(x = K, y = AIC)) +
+   geom_line() +
+   geom_point() +
+   scale_x_continuous(breaks = k_values) +
+   labs(title = "AIC vs Number of Fourier Terms (K)", x = "K", y = "AIC") +
+   theme_minimal()
 ```
 Based on the plot K=3 or 5 is ideal.
-
 
 ```{r}
 # tslm without predictors
@@ -376,12 +437,11 @@ Based on the plot K=3 or 5 is ideal.
 
 ```{r}
 
-
-# fourier tslm with predictors. 
-formula1 <- as.formula(paste("ozone.ts ~ trend + fourier(ozone.ts, K=3) +", 
+# fourier tslm with predictors.
+formula1 <- as.formula(paste("ozone_train_ts ~ trend + fourier(ozone_train_ts, K=3) +",
                              paste(predictors, collapse = " + ")))
 
-formula2 <- as.formula(paste("ozone.ts ~ trend + fourier(ozone.ts, K=3) +", 
+formula2 <- as.formula(paste("ozone_train_ts ~ trend + fourier(ozone_train_ts, K=3) +",
                              paste(significant_vars, collapse = " + ")))
 
 ozone.tslm.fourier1 <- tslm(formula1, data = train_data)
@@ -390,23 +450,167 @@ ozone.tslm.fourier2 <- tslm(formula2, data = train_data)
 #summary(ozone.tslm.fourier1)
 summary(ozone.tslm.fourier1)$adj.r.squared
 summary(ozone.tslm.fourier2)$adj.r.squared
+
 ```
 With imputation: Adj R^2 of 66.6
 
 Without imputation: Adjusted R^2 of 70.45% with K=5. Strong results, although this model has 22 predictors.
 
-```{r}
-test.ts <- ts(test_data$Ozone_ppm, frequency = 365,
-              start = c(2021, 1))
-#Doesn't work. TODO: troubleshoot this more.
-#pred <- forecast(ozone.tslm.fourier1, newdata = test_data)
-pred <- predict(ozone.tslm.fourier1, newdata = test_data)
+# 8.3 Fit Fourier + predictors and forecast 2021 properly
 
-accuracy(pred, test_data$Ozone_ppm)
+This is the corrected out-of-sample evaluation. We:
+
+- compute Fourier terms on the training series
+
+- project Fourier terms forward into the test horizon using fourierf()
+
+- forecast with forecast(..., xreg=...)
+
+```{r}
+# --- Forecast out-of-sample properly (Fourier + xreg)
+K <- 3
+h <- nrow(test_data)
+
+# time series used to fit
+ozone_train_ts <- ts(train_data$Ozone_ppm, frequency = 365)
+
+# Build xreg matrices from predictors (must match train/test row counts)
+xreg_train <- train_data %>%
+  select(all_of(predictors)) %>%
+  mutate(across(everything(), as.numeric)) %>%
+  as.matrix()
+
+xreg_test <- test_data %>%
+  select(all_of(predictors)) %>%
+  mutate(across(everything(), as.numeric)) %>%
+  as.matrix()
+
+# Fourier terms
+four_train <- fourier(ozone_train_ts, K = K)
+four_test  <- fourierf(ozone_train_ts, K = K, h = h)
+
+xreg_train_all <- cbind(four_train, xreg_train)
+xreg_test_all  <- cbind(four_test,  xreg_test)
+
+# Fit + forecast
+fit_fourier <- tslm(ozone_train_ts ~ trend + season, xreg = xreg_train_all)
+fc <- forecast(fit_fourier, xreg = xreg_test_all, h = h)
+
+# Accuracy vs actual
+accuracy(fc$mean, test_data$Ozone_ppm)
+
+```
+
+## 9. classification Modeling (Logistic Regression)
+
+# 9.1 Define classification target
+
+We classify days as “Orange or worse” using the AQI indicator already in the dataset:
+
+- AQI_AtLeast_Orange = 1 if AQI ≥ 101
+
+```{r logit}
+train_cls <- train_data %>%
+  mutate(AQI_AtLeast_Orange = factor(AQI_AtLeast_Orange, levels = c(0, 1)))
+
+test_cls <- test_data %>%
+  mutate(AQI_AtLeast_Orange = factor(AQI_AtLeast_Orange, levels = c(0, 1)))
+
+```
+
+# 9.2 Logistic regression (interpretable classifier)
+We use a small, interpretable set of predictors (similar to regression drivers).
+
+```{r}
+
+cls_vars <- c("NO2_ppb_or_ppm", "SO2_ppb_or_ppm", "Wind2m_ms",
+              "DewPoint_C", "Precip_mm", "Solar_Wm2", "DayOfYear")
+
+cls_formula <- as.formula(paste("AQI_AtLeast_Orange ~", paste(cls_vars, collapse = " + ")))
+logit_model <- glm(cls_formula, data = train_cls, family = binomial())
+summary(logit_model)
+
+```
+
+## 10. PCA (Dimension Reduction)
+
+PCA is used here to reduce redundancy among correlated weather variables. We:
+
+- standardize predictors
+
+- compute PCs
+
+- examine variance explained and loadings
+
+- optionally refit regression using PCs
+
+# 10.1 Prepare PCA predictors
+
+```{r}
+
+pca_vars <- c("Temp_C","TempMax_C","TempMin_C","Wind2m_ms","Wind10m_ms",
+              "RH_percent","DewPoint_C","Precip_mm","Pressure_kPa","Solar_Wm2")
+
+pca_train <- train_data %>%
+  select(all_of(pca_vars)) %>%
+  mutate(across(everything(), as.numeric))
+
+pca_fit <- prcomp(pca_train, center = TRUE, scale. = TRUE)
+
+# Scree plot
+plot(pca_fit, type = "l", main = "Scree Plot (PCA)")
+summary(pca_fit)
+
+```
+
+# 10.2 Interpret component loadings
+
+```{r}
+
+loadings <- pca_fit$rotation
+head(loadings)
+
+```
+
+# 10.3 Regression using PCs
+We use enough PCs to explain ~80-90% variance.
+
+```{r}
+
+var_explained <- cumsum(pca_fit$sdev^2) / sum(pca_fit$sdev^2)
+n_pc <- which(var_explained >= 0.85)[1]
+n_pc
+
+```
+
+```{r}
+
+train_pcs <- as.data.frame(pca_fit$x[, 1:n_pc, drop = FALSE])
+train_pcs$Ozone_ppm <- train_data$Ozone_ppm
+
+pca_model <- lm(Ozone_ppm ~ ., data = train_pcs)
+summary(pca_model)
+
+```
+
+Evaluate on 2021 data:
+
+```{r}
+
+pca_test <- test_data %>%
+  select(all_of(pca_vars)) %>%
+  mutate(across(everything(), as.numeric))
+
+test_scores <- predict(pca_fit, newdata = pca_test)[, 1:n_pc, drop = FALSE]
+pred_pca <- predict(pca_model, newdata = as.data.frame(test_scores))
+
+cat("PCA Regression (Test 2021): RMSE =", RMSE(pred_pca, test_data$Ozone_ppm),
+    " MAE =", MAE(pred_pca, test_data$Ozone_ppm), "\n")
+
 ```
 
 
-
+## Don't what to do with these sections below just yet
 Normal tlsm
 ```{r}
 train_monthly <- train_data %>%
@@ -434,8 +638,6 @@ cat("Train Adj R^2 (formula2):", summary(ozone.tslm.monthly2)$adj.r.squared, "\n
 ```
 
 
-
-
 ```{r}
 test.ts.monthly <- ts(test_monthly$Ozone_ppm, frequency = 12, start = c(2021, 1))
 
@@ -449,25 +651,23 @@ cat("Train Adj R^2 (formula2):", summary(ozone.tslm.monthly2)$adj.r.squared, "\n
 accuracy(forecast2, test.ts.monthly)
 ```
 
-
-
-
 Predictor-less ARIMA
 ```{r}
-ozone.arima <- auto.arima(ozone.ts)
-summary(ozone.arima)
+
+# ozone.arima <- auto.arima(ozone_train_ts)
+# summary(ozone.arima)
 
 ```
 
 ARIMA with Predictors
 ```{r}
-f
+
 xreg_matrix <- as.matrix(train_data[, c("NO2_ppb_or_ppm", "CO_ppm", "SO2_ppb_or_ppm", 
                                          "Temp_C", "Wind2m_ms", "RH_percent", 
                                          "DewPoint_C", "Precip_mm", "Pressure_kPa", 
                                          "Solar_Wm2", "DayOfYear")])
 
-ozone.arima.xreg <- auto.arima(ozone.ts, xreg = xreg_matrix)
+ozone.arima.xreg <- auto.arima(ozone_train_ts, xreg = xreg_matrix)
 summary(ozone.arima.xreg)
 ```
 using predictors somehow makes ARIMA worse. 
