@@ -31,7 +31,7 @@ Our primary goal is interpretability and sound evaluation rather than maximizing
 
 # 2.Library Block
 
-```{r library block}
+```{r message=FALSE, warning=FALSE}
 library(utils)
 library(ggplot2)
 library(dplyr)
@@ -73,7 +73,6 @@ missing_summary
 
 aqi$Date<-as.Date(aqi$Date)
 
-# impute<-FALSE # I think we should remove this
 ```
 
 ## 4.2 Handling missing target values (Ozone_ppm)
@@ -93,7 +92,7 @@ For predictor variables, we impute missing numeric values using a simple strateg
 
 ```{r impute remaining predictors}
 
-impute_method <- "median" # mean can be used as well
+impute_method <- "median" 
 
 impute_fun <- if (impute_method == "median") median else mean
 
@@ -126,11 +125,28 @@ ggplot(aqi_clean, aes(y = Ozone_ppm)) +
   theme_minimal()
 ```
 
+
+
 ## 5.2 Ozone over time
 
 This plot helps identify long-term trend and year-to-year differences.
 
-```{r}
+```{r message=FALSE}
+
+
+# line chart
+
+aqi_clean <- aqi_clean %>%
+  mutate(Year = lubridate::year(Date))
+
+ggplot(aqi_clean, aes(x = Date, y = Ozone_ppm, color = as.factor(Year))) +
+  geom_line(alpha = 0.6) +
+  geom_smooth(aes(group = 1), method = "loess", formula = y ~ x, se = TRUE, alpha = 0.2) +
+  scale_x_date(date_breaks = "3 months", date_labels = "%b %Y") +
+  labs(title = "Ozone Levels Over Time (2019–2021)",
+       x = "Date", y = "Ozone (ppm)", color = "Year") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
 # dot plot
 ggplot(aqi_clean %>% filter(!is.na(Ozone_ppm)), 
@@ -142,21 +158,11 @@ ggplot(aqi_clean %>% filter(!is.na(Ozone_ppm)),
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
-# line chart
-
-aqi_clean <- aqi_clean %>%
-  mutate(Year = lubridate::year(Date))
-
-ggplot(aqi_clean, aes(x = Date, y = Ozone_ppm, color = as.factor(Year))) +
-  geom_line(alpha = 0.6) +
-  geom_smooth(aes(group = 1), method = "loess", se = TRUE, alpha = 0.2) +
-  scale_x_date(date_breaks = "3 months", date_labels = "%b %Y") +
-  labs(title = "Ozone Levels Over Time (2019–2021)",
-       x = "Date", y = "Ozone (ppm)", color = "Year") +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
-
 ```
+
+
+
+
 
 ## 5.3 Seasonality (Day of Year)
 
@@ -220,12 +226,9 @@ all_numeric <- train_data %>% select(where(is.numeric)) %>% names()
 leakage_vars <- c("Ozone_ppm", "Ozone_ppb", "AQI", "AQI_Ozone")
 predictors <- setdiff(all_numeric, leakage_vars)
 
-# Optional: if wee need to remove additional fields
-# predictors <- setdiff(predictors, c("AQI_PM25"))
-
 ```
 
-## 7.2 Correlation review (drop zero-variance columns first)
+## 7.2 Correlation review 
 
 ```{r correlation review}
 
@@ -254,8 +257,10 @@ corrplot(cor_matrix)
 # corrplot(cor_matrix)
 
 ```
-
+Outside of expect collinear groups(i.e. temperature or time related predictors), there is moderate correlation between sunlight, relative humidity, and temperature. There is also weak correlation between NO2, SO2, and CO2.
 ## 7.3 Baseline linear regression
+
+A baseline model using all possible predictors.
 
 ```{r linear regression}
 
@@ -263,7 +268,11 @@ formula_full <- as.formula(paste("Ozone_ppm ~", paste(predictors, collapse = " +
 lm_full <- lm(formula_full, data = train_data)
 summary(lm_full)
 
-cat("Train Adj R^2:", summary(lm_full)$adj.r.squared, "\n")
+lm_full_test_pred <- predict(lm_full, newdata = test_data)
+
+print("Training:")
+cat("R^2:", summary(lm_full)$adj.r.squared, "\n")
+print(accuracy(lm_full$fitted.values, train_data$Ozone_ppm))
 
 ```
 
@@ -306,9 +315,15 @@ obs_red  <- test_data$Ozone_ppm
 cat("Reduced LM (Test 2021): RMSE =", RMSE(pred_red, obs_red),
     " MAE =", MAE(pred_red, obs_red), "\n")
 
+cat("Train RMSE:", accuracy(lm_reduced$fitted.values, train_data$Ozone_ppm)[, "RMSE"], "\n")
+cat("Test RMSE: ", accuracy(pred_red, obs_red)[, "RMSE"], "\n")
 ```
 
-# Stepwise 
+Compared with the full model 
+
+# 7.5 Stepwise Regression
+
+We assess bidirectional stepwise regression, giving the model access to all predictors.
 
 ```{r}
 trControl <- trainControl(method = "none")
@@ -322,9 +337,6 @@ model_stepwise <- train(
   direction = "both",
   trace = FALSE
 )
-```
-
-```{r}
 lm_stepwise <- model_stepwise$finalModel
 ```
 
@@ -337,6 +349,7 @@ p <- length(coef(lm_stepwise)) - 1
 lm_stepwise_adj_r2 <- 1 - (1 - lm_stepwise_r2) * (n - 1) / (n - p - 1)
 summary(lm_stepwise)
 cat("Train Adj R^2:", lm_stepwise_adj_r2, "\n")
+cat("Train RMSE:", accuracy(lm_stepwise$fitted.values, train_data$Ozone_ppm)[, "RMSE"], "\n")
 
 pred <- predict(lm_stepwise, test_data)
 actual <- test_data$Ozone_ppm
@@ -346,60 +359,22 @@ test_r2 <- 1 - ss_res / ss_tot
 n_test <- nrow(test_data)
 test_adj_r2 <- 1 - (1 - test_r2) * (n_test - 1) / (n_test - p - 1)
 cat("Test Adj R^2: ", test_adj_r2, "\n")
-
-
-```
-With Imputation:
-Train Adj R^2: 0.5937668 
-Test Adj R^2:  0.2704882 
-
-
-Without Imputation:
-Train Adj R^2: 0.6280177 
-Test Adj R^2:  0.281659 
-Only removes 1 predictor... Forward and backward have similar performance. Tried using best subset selection instead, but there's way too many predictors for that.
-
-62% is decent, but 11 predictors is a lot.
-
-
-Try removing predictors where p >0.05. (CO_ppm and Pressure_kPa)
-```{r}
-# removed these two for now "PM25_ugm3", "PM10_ugm3", but may need to add these back in. R2 is much worse without them 
-
-significant_vars <- c("NO2_ppb_or_ppm", "SO2_ppb_or_ppm", 
-                      "Wind2m_ms", "DewPoint_C", "Precip_mm", "Solar_Wm2", "DayOfYear")
-
-formula_reduced <- as.formula(paste("Ozone_ppm ~", paste(significant_vars, collapse = " + ")))
-lm_reduced <- lm(formula_reduced, data = train_data)
-summary(lm_reduced)
-
-cat("Train Adj R^2:", summary(lm_reduced)$adj.r.squared, "\n")
-
-pred <- predict(lm_reduced, test_data)
-actual <- test_data$Ozone_ppm
-ss_res <- sum((actual - pred)^2)
-ss_tot <- sum((actual - mean(actual))^2)
-test_r2 <- 1 - ss_res / ss_tot
-n_test <- nrow(test_data)
-p <- length(coef(lm_reduced)) - 1
-test_adj_r2 <- 1 - (1 - test_r2) * (n_test - 1) / (n_test - p - 1)
-cat("Test Adj R^2: ", test_adj_r2, "\n")
+cat("Test RMSE: ", accuracy(pred, actual)[, "RMSE"], "\n")
 ```
 
-With Imputation:
-Train Adj R^2: 0.5363423 
-Test Adj R^2:  0.3739211 
+This model drops 6 of the 20 values in predictors. We see that it keeps in both Wind2m and Wind10m, whicih are heavily correlated, despite dropping similarly correlated predictors.
 
-Without:
-
-Train Adj R^2: 0.5819515 
-Test Adj R^2:  0.2246784 
+Forward and backward are not shown, but had similar, but inferior performance. 
 
 The regression results indicate that meteorological conditions such as solar radiation, wind speed, and dew point have statistically significant relationships with ozone levels. Solar radiation and warmer conditions tend to increase ozone formation, while precipitation and wind may reduce ozone concentrations by dispersing pollutants.
 
 # 8. Seasonality and Fourier Time_Series Regression
 
+In this section we use techniques that are better suited and specifically designed for time-series data.
+
 ## 8.1 Autocorrelation (ACF)
+
+We first start by creating an ACF plot.
 
 ```{r autocorrelation}
 
@@ -445,7 +420,6 @@ This is the corrected out-of-sample evaluation. We:
 - forecast with forecast(..., xreg=...)
 
 ```{r}
-# --- Forecast out-of-sample properly (Fourier + xreg)
 K <- 3
 h <- nrow(test_data)
 
@@ -501,10 +475,14 @@ cat("RMSE:",accuracy(fc$mean, test_data$Ozone_ppm)[, "RMSE"], "\n")
 
 ```
 
-The Fourier model captured seasonal patterns in the training data, but severely overfits and did not outperform the regression models on the 2021 test set.
+The Fourier model captured seasonal patterns in the and testing data, performing exceptionally well compared to linear models.
+
+## 8.4 ARIMA
+
+We assess the feasibility of augmenting the Fourier model with arima.
 
 ```{r}
-# auto.arima on residuals (lets it pick best order including differencing)
+# auto.arima on residuals 
 res.arima <- auto.arima(fit_fourier$residuals)
 summary(res.arima)
 
@@ -598,8 +576,10 @@ Many meteorological variables are highly correlated (for example temperature and
 
 ```{r}
 
-pca_vars <- c("Temp_C","TempMax_C","TempMin_C","Wind2m_ms","Wind10m_ms",
-              "RH_percent","DewPoint_C","Precip_mm","Pressure_kPa","Solar_Wm2")
+#pca_vars <- c("Temp_C","TempMax_C","TempMin_C","Wind2m_ms","Wind10m_ms",
+#              "RH_percent","DewPoint_C","Precip_mm","Pressure_kPa","Solar_Wm2")
+
+pca_vars<-predictors[1:length(predictors)-1]
 
 pca_train <- train_data %>%
   select(all_of(pca_vars)) %>%
@@ -621,9 +601,10 @@ loadings <- pca_fit$rotation
 head(loadings)
 
 ```
+From the loadings table, we see that the first PC is primarily is concerned with Temperature and Relative Humidity The second PC is primarily influenced by wind. The third is influenced by a combination of Wind and Relative Humidity.
 
 ## 10.3 Regression using PCs
-We use enough PCs to explain ~80-90% variance.
+We use enough PCs to explain ~80-90% variance. This come out to 4 PCs.
 
 ```{r}
 
@@ -660,6 +641,7 @@ cat("PCA Regression (Test 2021): RMSE =", RMSE(pred_pca, test_data$Ozone_ppm),
 ```
 
 
+
 # 11. Model Perfomance Comparison and Interpretation
 
 ```{r model comparison}
@@ -693,52 +675,13 @@ model_results
 ggplot(model_results, aes(x = Model, y = RMSE)) +
   geom_bar(stat="identity", fill="steelblue") +
   theme_minimal() +
-  labs(title="Model Comparison (RMSE)",
+  labs(title="Model Comparison (Test RMSE)",
        y="RMSE",
        x="")
 
 ```
 
-Based on RMSE and MAE, the linear regression models performed best on the 2021 test set. The Fourier regression captured seasonality but did not outperform the simpler regression models, possibly due to overfitting or changes in seasonal patterns in 2021. The PCA regression had higher error, suggesting that while it reduces dimensionality, it may lose important predictive information contained in the original variables.
-
-# Don't what to do with these sections below just yet
-Normal tlsm
-```{r}
-train_monthly <- train_data %>%
-  group_by(Year, Month) %>%
-  summarise(across(where(is.numeric), mean, na.rm = TRUE))
-
-test_monthly <- test_data %>%
-  group_by(Year, Month) %>%
-  summarise(across(where(is.numeric), mean, na.rm = TRUE))
-
-ozone.ts.monthly <- ts(train_monthly$Ozone_ppm, frequency = 12, start = c(2019, 1))
-
-#formula1 <- as.formula(paste("ozone.ts.monthly ~ trend + season +", paste(predictors, collapse = " + ")))
-ts_vars <- c("NO2_ppb_or_ppm", "SO2_ppb_or_ppm", "Wind2m_ms", 
-                      "DewPoint_C", "Precip_mm", "Solar_Wm2")
-
-formula2 <- as.formula(paste("ozone.ts.monthly ~ trend + season +", paste(ts_vars, collapse = " + ")))
-
-#ozone.tslm.monthly1 <- tslm(formula1, data = train_monthly)
-ozone.tslm.monthly2 <- tslm(formula2, data = train_monthly)
-
-#cat("Train Adj R^2 (formula1):", summary(ozone.tslm.monthly1)$adj.r.squared, "\n")
-cat("Train Adj R^2 (formula2):", summary(ozone.tslm.monthly2)$adj.r.squared, "\n")
-
-```
+Based on RMSE and MAE, the Fourier regression performed best on the 2021 test set with the lowest RMSE of 0.00601, followed by stepwise regression. The standard linear and reduced regressions performed similarly in the middle, while PCA regression had the highest error, suggesting that dimensionality reduction through principal components loses predictive information present in the original variables.
 
 
-```{r}
-test.ts.monthly <- ts(test_monthly$Ozone_ppm, frequency = 12, start = c(2021, 1))
-
-#forecast1 <- forecast(ozone.tslm.monthly1, newdata = test_monthly)
-forecast2 <- forecast(ozone.tslm.monthly2, newdata = test_monthly[, significant_vars])
-
-#cat("Train Adj R^2 (formula1):", summary(ozone.tslm.monthly1)$adj.r.squared, "\n")
-cat("Train Adj R^2 (formula2):", summary(ozone.tslm.monthly2)$adj.r.squared, "\n")
-
-#accuracy(forecast1, test.ts.monthly)
-accuracy(forecast2, test.ts.monthly)
-```
 
