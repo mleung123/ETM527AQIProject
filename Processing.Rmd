@@ -26,8 +26,7 @@ This project uses daily air quality and weather observations for Portland (2019�
 
 5. Apply PCA to address multicollinearity among weather variables (dimension reduction)
 
-Our primary goal is interpretability and sound evaluation rather than maximizing the number of algorithms implemented. Understanding the relationships between meteorological conditions and ozone levels is key for public health insights and potential forecasting applications.conditions and ozone variability will help inform forecasting and public health alerts. 
-
+Our primary goal is interpretability and sound evaluation rather than maximizing the number of algorithms implemented. Understanding the relationships between meteorological conditions and ozone levels is key for public health insights and potential forecasting applications.
 
 # 2.Library Block
 
@@ -76,6 +75,7 @@ aqi$Date<-as.Date(aqi$Date)
 ```
 
 ## 4.2 Handling missing target values (Ozone_ppm)
+
 We do not impute the target variable (ozone). Rows missing the target are removed from modeling datasets.
 
 ```{r missing target values}
@@ -84,7 +84,6 @@ We do not impute the target variable (ozone). Rows missing the target are remove
 aqi_clean <- aqi %>%
   filter(!is.na(Ozone_ppm))
 ```
-
 
 ## 4.3 Impute remaining numeric predictors
 
@@ -125,8 +124,6 @@ ggplot(aqi_clean, aes(y = Ozone_ppm)) +
   theme_minimal()
 ```
 
-
-
 ## 5.2 Ozone over time
 
 This plot helps identify long-term trend and year-to-year differences.
@@ -160,10 +157,6 @@ ggplot(aqi_clean %>% filter(!is.na(Ozone_ppm)),
 
 ```
 
-
-
-
-
 ## 5.3 Seasonality (Day of Year)
 
 ```{r}
@@ -188,7 +181,7 @@ ggplot(aqi_clean, aes(x = as.factor(Month), y = Ozone_ppm)) +
   theme_minimal()
 ```
 
-The seasonal pattern is clear: ozone concentrations increase during late spring and summer months and decline during winter. This is consistent with atmospheric chemistry, where ozone formation is driven by sunlight and temperature-dependent reactions involving nitrogen oxides and volatile organic compounds. The boxplot by month also confirms higher median ozone levels in late spring and summermonths (April–August) compared to Fall / winter months (October–January). It is also interesting to note the the inner quartile is much wider during the fall / winter months than the higher median months of spring / summer.
+The seasonal pattern is clear: ozone concentrations increase during late spring and summer months and decline during winter. This is consistent with atmospheric chemistry, where ozone formation is driven by sunlight and temperature-dependent reactions involving nitrogen oxides and volatile organic compounds. The boxplot by month also confirms higher median ozone levels in late spring and summermonths (April–August) compared to Fall / winter months (October–January). It is also interesting to note the interquartile range is wider during fall and winter months than during the spring and summer period, suggesting greater variability in ozone levels during colder seasons.
 
 # 6. Train/Test Split (Time Based)
 
@@ -257,7 +250,9 @@ corrplot(cor_matrix)
 # corrplot(cor_matrix)
 
 ```
+
 Outside of expect collinear groups(i.e. temperature or time related predictors), there is moderate correlation between sunlight, relative humidity, and temperature. There is also weak correlation between NO2, SO2, and CO2.
+
 ## 7.3 Baseline linear regression
 
 A baseline model using all possible predictors.
@@ -362,7 +357,7 @@ cat("Test Adj R^2: ", test_adj_r2, "\n")
 cat("Test RMSE: ", accuracy(pred, actual)[, "RMSE"], "\n")
 ```
 
-This model drops 6 of the 20 values in predictors. We see that it keeps in both Wind2m and Wind10m, whicih are heavily correlated, despite dropping similarly correlated predictors.
+This model removes six predictors from the original set, retaining variables that provide the strongest predictive contribution. We see that it keeps in both Wind2m and Wind10m, which are heavily correlated, despite dropping similarly correlated predictors.
 
 Forward and backward are not shown, but had similar, but inferior performance. 
 
@@ -385,7 +380,6 @@ Acf(ozone_train_ts, main = "ACF of Daily Ozone (Train: 2019–2020)")
 
 A slowly decaying ACF and repeating structure suggests strong seasonality. For ozone, this is expected due to sunlight-driven chemistry and summer weather patterns.
 
-
 ## 8.2 Select Fourier complexity (K)
 
 We use AIC to select the number of Fourier harmonics (K). Larger K captures more complex seasonal shape but risks overfitting.
@@ -407,7 +401,8 @@ We use AIC to select the number of Fourier harmonics (K). Larger K captures more
    labs(title = "AIC vs Number of Fourier Terms (K)", x = "K", y = "AIC") +
    theme_minimal()
 ```
-Based on the plot K=3 or 5 is ideal.
+
+Based on the plot K = 3 or 5 is ideal.
 
 ## 8.3 Fit Fourier + predictors 
 
@@ -475,7 +470,7 @@ cat("RMSE:",accuracy(fc$mean, test_data$Ozone_ppm)[, "RMSE"], "\n")
 
 ```
 
-The Fourier model captured seasonal patterns in the and testing data, performing significantly better than the linear models.
+The Fourier model captured seasonal patterns in both the training and testing data, performing significantly better than the linear models.
 
 ## 8.4 ARIMA
 
@@ -520,7 +515,9 @@ cat("\nTest:\n")
 cat("Adj R²:", adj_r2_test, "\n")
 cat("RMSE:  ", accuracy(final_pred, test_data$Ozone_ppm)[, "RMSE"], "\n")
 ```
+
 From the AR(2) coefficient of 0.49, we have moderate positive autocorrelation in the Fourier residuals. This confirms that residuals weren't white noise.
+
 For training, using AR(1) has a significant improvement on Adj R^2 and RMSE.
 
 However the effect it has is extremely small on the test set. This is because our forecast window is 365 days, and its effects become almost insignificant within a few weeks, without residuals to guide it. While ARIMA would be  effective on a model that has a shorter forecast window, it is unsuited to this large of a forecast window.
@@ -529,34 +526,61 @@ However the effect it has is extremely small on the test set. This is because ou
 
 ## 9.1 Define classification target
 
-We classify days as “Orange or worse” using the AQI indicator already in the dataset:
+To explore classification, we created a binary target indicating whether a day had an elevated AQI level. In this analysis, a day is classified as an elevated AQI day if the daily AQI is **50 or higher**.
 
-- AQI_AtLeast_Orange = 1 if AQI ≥ 50
+- `AQI_AtLeast_50 = 1` if AQI ≥ 50  
+- `AQI_AtLeast_50 = 0` if AQI < 50  
 
-While regression predicts ozone levels directly, classification models are useful for public health decision making because they identify days likely to exceed air quality thresholds.
+While regression predicts ozone levels directly, classification models can be useful for public health decision making because they identify days more likely to exceed air quality thresholds.
 
 ```{r logit}
 train_cls <- train_data %>%
-  mutate(AQI_AtLeast_Orange = factor(AQI_AtLeast_Orange, levels = c(0, 1)))
+  mutate(AQI_AtLeast_50 = factor(ifelse(AQI >= 50, 1, 0), levels = c(0, 1)))
 
 test_cls <- test_data %>%
-  mutate(AQI_AtLeast_Orange = factor(AQI_AtLeast_Orange, levels = c(0, 1)))
+  mutate(AQI_AtLeast_50 = factor(ifelse(AQI >= 50, 1, 0), levels = c(0, 1)))
+
+table(train_cls$AQI_AtLeast_50)
+table(test_cls$AQI_AtLeast_50)
 
 ```
 
 ## 9.2 Logistic regression (interpretable classifier)
-We use a small, interpretable set of predictors (similar to regression drivers).
+
+We use a small, interpretable set of predictors similar to those used in the regression models.
 
 ```{r}
 
 cls_vars <- c("NO2_ppb_or_ppm", "SO2_ppb_or_ppm", "Wind2m_ms",
               "DewPoint_C", "Precip_mm", "Solar_Wm2", "DayOfYear")
 
-cls_formula <- as.formula(paste("AQI_AtLeast_Orange ~", paste(cls_vars, collapse = " + ")))
+cls_formula <- as.formula(paste("AQI_AtLeast_50 ~", paste(cls_vars, collapse = " + ")))
 logit_model <- glm(cls_formula, data = train_cls, family = binomial())
 summary(logit_model)
 
 ```
+
+## 9.3 Confusion matrix and performance metrics
+
+```{r}
+prop.table(table(train_cls$AQI_AtLeast_50))
+prop.table(table(test_cls$AQI_AtLeast_50))
+
+# predicted probabilities
+prob_test <- predict(logit_model, newdata = test_cls, type = "response")
+
+# classify using 0.1 threshold (lower than 0.5 due to class imbalance)
+pred_class <- ifelse(prob_test > 0.1, 1, 0)
+
+pred_class <- factor(pred_class, levels = c(0,1))
+
+# confusion matrix
+table(Predicted = pred_class, Actual = test_cls$AQI_AtLeast_50)
+```
+
+Although the classification problem remains imbalanced, the logistic regression model produced stable and interpretable coefficient estimates. Several predictors show statistically significant relationships with elevated AQI levels. In particular, nitrogen dioxide and sulfur dioxide concentrations are positively associated with elevated AQI days, while precipitation has a negative relationship, consistent with atmospheric cleansing effects. Solar radiation also appears to increase the likelihood of elevated AQI levels, which aligns with the photochemical processes involved in ozone formation.
+
+Despite the relatively small number of elevated AQI days in the dataset, the model demonstrates that environmental predictors can provide meaningful signals for classification. However, due to the strong class imbalance, the logistic regression results should be interpreted cautiously and primarily as an exploratory classification analysis rather than a production forecasting model.
 
 # 10. PCA (Dimension Reduction)
 
@@ -601,10 +625,10 @@ loadings <- pca_fit$rotation
 head(loadings)
 
 ```
-From the loadings table, we see that the first PC is primarily is concerned with Temperature and Relative Humidity The second PC is primarily influenced by wind. The third is influenced by a combination of Wind and Relative Humidity.
 
 ## 10.3 Regression using PCs
-We use enough PCs to explain ~80-90% variance. This come out to 4 PCs.
+
+We use enough PCs to explain ~80-90% variance. This come out to 6 PCs.
 
 ```{r}
 
@@ -640,18 +664,16 @@ cat("PCA Regression (Test 2021): RMSE =", RMSE(pred_pca, test_data$Ozone_ppm),
 
 ```
 
-
-
 # 11. Model Perfomance Comparison and Interpretation
 
 ```{r model comparison}
 
 model_results <- data.frame(
-  Model = c("Linear Regression",
-            "Reduced Regression",
-            "Stepwise Regression",
-            "Fourier Regression",
-            "PCA Regression"),
+  Model = c("Linear",
+            "Reduced",
+            "Stepwise",
+            "Fourier",
+            "PCA"),
   
   RMSE = c(
     rmse_lm,
