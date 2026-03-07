@@ -411,7 +411,7 @@ Acf(ozone_train_ts, main = "ACF of Daily Ozone (Train: 2019–2020)")
 A slowly decaying ACF and repeating structure suggests strong seasonality. For ozone, this is expected due to sunlight-driven chemistry and summer weather patterns.
 
 
-## 8.2 Select Fourier comlexity (K)
+## 8.2 Select Fourier complexity (K)
 
 We use AIC to select the number of Fourier harmonics (K). Larger K captures more complex seasonal shape but risks overfitting.
 
@@ -434,36 +434,7 @@ We use AIC to select the number of Fourier harmonics (K). Larger K captures more
 ```
 Based on the plot K=3 or 5 is ideal.
 
-```{r}
-# tslm without predictors
-# very weak results (adjr^2=0.286)
-
-#ozone.tslm <- tslm(ozone.ts ~ trend + fourier(ozone.ts, K=3))
-#summary(ozone.tslm)
-```
-
-```{r}
-
-# fourier tslm with predictors.
-formula1 <- as.formula(paste("ozone_train_ts ~ trend + fourier(ozone_train_ts, K=3) +",
-                             paste(predictors, collapse = " + ")))
-
-formula2 <- as.formula(paste("ozone_train_ts ~ trend + fourier(ozone_train_ts, K=3) +",
-                             paste(significant_vars, collapse = " + ")))
-
-ozone.tslm.fourier1 <- tslm(formula1, data = train_data)
-ozone.tslm.fourier2 <- tslm(formula2, data = train_data)
-
-#summary(ozone.tslm.fourier1)
-summary(ozone.tslm.fourier1)$adj.r.squared
-summary(ozone.tslm.fourier2)$adj.r.squared
-
-```
-With imputation: Adj R^2 of 66.6
-
-Without imputation: Adjusted R^2 of 70.45% with K=5. Strong results, although this model has 22 predictors.
-
-## 8.3 Fit Fourier + predictors and forecast 2021 properly
+## 8.3 Fit Fourier + predictors 
 
 This is the corrected out-of-sample evaluation. We:
 
@@ -481,34 +452,100 @@ h <- nrow(test_data)
 # time series used to fit
 ozone_train_ts <- ts(train_data$Ozone_ppm, frequency = 365)
 
-# Build xreg matrices from predictors (must match train/test row counts)
-xreg_train <- train_data %>%
-  select(all_of(predictors)) %>%
-  mutate(across(everything(), as.numeric)) %>%
-  as.matrix()
+to_matrix <- function(df) df %>% select(all_of(predictors)) %>% mutate(across(everything(), as.numeric)) %>% as.matrix()
 
-xreg_test <- test_data %>%
-  select(all_of(predictors)) %>%
-  mutate(across(everything(), as.numeric)) %>%
-  as.matrix()
+train_df <- cbind(
+  ozone = as.numeric(ozone_train_ts),
+  fourier(ozone_train_ts, K = K),
+  to_matrix(train_data)
+) %>% as.data.frame()
 
-# Fourier terms
-four_train <- fourier(ozone_train_ts, K = K)
-four_test  <- fourierf(ozone_train_ts, K = K, h = h)
+colnames(train_df) <- gsub("-", "_", colnames(train_df))
 
-xreg_train_all <- cbind(four_train, xreg_train)
-xreg_test_all  <- cbind(four_test,  xreg_test)
+test_df <- as.data.frame(cbind(
+  fourierf(ozone_train_ts, K = K, h = h),
+  to_matrix(test_data)
+))
+colnames(test_df) <- gsub("-", "_", colnames(test_df))
+fourier_features <- c(
+  paste0(rep(c("S", "C"), K), rep(1:K, each = 2), "_365"), # fourier terms
+  "NO2_ppb_or_ppm", "SO2_ppb_or_ppm", "Wind2m_ms", "DewPoint_C",
+  "Precip_mm", "DayOfYear"
+)
 
-# Fit + forecast
-fit_fourier <- tslm(ozone_train_ts ~ trend + season, xreg = xreg_train_all)
-fc <- forecast(fit_fourier, xreg = xreg_test_all, h = h)
 
-# Accuracy vs actual
-accuracy(fc$mean, test_data$Ozone_ppm)
+formula_fourier <- as.formula(paste("ozone_train_ts ~ trend +", paste(fourier_features, collapse = " + ")))
+
+fit_fourier <- tslm(formula_fourier, data = train_df)
+
+fc <- forecast(fit_fourier, newdata = test_df, h = h)
+
+# Results
+print("Train:")
+cat("Adj R²:", summary(fit_fourier)$adj.r.squared, "\n")
+
+cat("RMSE:",accuracy(fit_fourier)[, "RMSE"], "\n")
+
+
+
+print("Test:")
+
+n_test <- length(test_data$Ozone_ppm)
+p <- length(coef(fit_fourier)) - 1
+ss_res <- sum((test_data$Ozone_ppm - fc$mean)^2)
+ss_tot <- sum((test_data$Ozone_ppm - mean(test_data$Ozone_ppm))^2)
+r2     <- 1 - ss_res/ss_tot
+adj_r2 <- 1 - (1 - r2) * (n_test - 1) / (n_test - p - 1)
+cat("Adj R²:", adj_r2, "\n")
+cat("RMSE:",accuracy(fc$mean, test_data$Ozone_ppm)[, "RMSE"], "\n")
 
 ```
 
-The Fourier model captured seasonal patterns in the training data but did not outperform the regression models on the 2021 test set.
+The Fourier model captured seasonal patterns in the training data, but severely overfits and did not outperform the regression models on the 2021 test set.
+
+```{r}
+# auto.arima on residuals (lets it pick best order including differencing)
+res.arima <- auto.arima(fit_fourier$residuals)
+summary(res.arima)
+
+# Combined fitted values and forecasts
+combined_train <- fit_fourier$fitted.values + res.arima$fitted
+lm_pred_test   <- forecast(fit_fourier, newdata = test_df, h = h)$mean
+res_pred_test  <- forecast(res.arima, h = h)$mean
+final_pred     <- lm_pred_test + res_pred_test
+
+# align train if auto.arima differenced (differencing loses first d observations)
+d <- res.arima$arma[6]  # number of differences chosen
+ozone_train_aligned <- tail(as.numeric(ozone_train_ts), length(combined_train))
+
+n <- length(ozone_train_aligned)
+p <- length(coef(fit_fourier)) + length(coef(res.arima)) - 1
+
+ss_res_train <- sum((ozone_train_aligned - combined_train)^2)
+ss_tot_train <- sum((ozone_train_aligned - mean(ozone_train_aligned))^2)
+r2_train     <- 1 - ss_res_train/ss_tot_train
+adj_r2_train <- 1 - (1 - r2_train) * (n - 1) / (n - p - 1)
+
+n_test <- length(test_data$Ozone_ppm)
+ss_res_test <- sum((test_data$Ozone_ppm - final_pred)^2)
+ss_tot_test <- sum((test_data$Ozone_ppm - mean(test_data$Ozone_ppm))^2)
+r2_test     <- 1 - ss_res_test/ss_tot_test
+adj_r2_test <- 1 - (1 - r2_test) * (n_test - 1) / (n_test - p - 1)
+
+cat("ARIMA order chosen:", arimaorder(res.arima), "\n")
+
+cat("\nTrain:\n")
+cat("Adj R²:", adj_r2_train, "\n")
+cat("RMSE:  ", accuracy(combined_train, ozone_train_aligned)[, "RMSE"], "\n")
+
+cat("\nTest:\n")
+cat("Adj R²:", adj_r2_test, "\n")
+cat("RMSE:  ", accuracy(final_pred, test_data$Ozone_ppm)[, "RMSE"], "\n")
+```
+From the AR(2) coefficient of 0.49, we have moderate positive autocorrelation in the Fourier residuals. This confirms that residuals weren't white noise.
+For training, using AR(1) has a significant improvement on Adj R^2 and RMSE.
+
+However the effect it has is extremely small on the test set. This is because our forecast window is 365 days, and its effects become almost insignificant within a few weeks, without residuals to guide it. While ARIMA would be  effective on a model that has a shorter forecast window, it is unsuited to this large of a forecast window.
 
 # 9. classification Modeling (Logistic Regression)
 
@@ -705,23 +742,3 @@ cat("Train Adj R^2 (formula2):", summary(ozone.tslm.monthly2)$adj.r.squared, "\n
 accuracy(forecast2, test.ts.monthly)
 ```
 
-Predictor-less ARIMA
-```{r}
-
-# ozone.arima <- auto.arima(ozone_train_ts)
-# summary(ozone.arima)
-
-```
-
-ARIMA with Predictors
-```{r}
-
-xreg_matrix <- as.matrix(train_data[, c("NO2_ppb_or_ppm", "CO_ppm", "SO2_ppb_or_ppm", 
-                                         "Temp_C", "Wind2m_ms", "RH_percent", 
-                                         "DewPoint_C", "Precip_mm", "Pressure_kPa", 
-                                         "Solar_Wm2", "DayOfYear")])
-
-ozone.arima.xreg <- auto.arima(ozone_train_ts, xreg = xreg_matrix)
-summary(ozone.arima.xreg)
-```
-using predictors somehow makes ARIMA worse. 
