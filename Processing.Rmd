@@ -475,11 +475,11 @@ cat("RMSE:",accuracy(fc$mean, test_data$Ozone_ppm)[, "RMSE"], "\n")
 
 ```
 
-The Fourier model captured seasonal patterns in the and testing data, performing exceptionally well compared to linear models.
+The Fourier model captured seasonal patterns in the and testing data, performing significantly better than the linear models.
 
 ## 8.4 ARIMA
 
-We assess the feasibility of augmenting the Fourier model with arima.
+We assess the feasibility of augmenting the Fourier model with ARIMA.
 
 ```{r}
 # auto.arima on residuals 
